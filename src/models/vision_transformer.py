@@ -159,7 +159,7 @@ class VisionTransformer(nn.Module):
     def forward(self, x, masks=None):
         """
         :param x: input image/video
-        :param masks: indices of patch tokens to mask (remove)
+        :param masks: indices of patch tokens to keep (yes)
         """
 
         if masks is not None and not isinstance(masks, list):

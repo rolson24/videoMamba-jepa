@@ -1,2 +1,3 @@
 .*.swp
 *.pyc
+src/datasets/SSv2/*
