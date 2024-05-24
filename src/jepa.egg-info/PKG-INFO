@@ -1,0 +1,6 @@
+Metadata-Version: 2.1
+Name: jepa
+Version: 0.0.1
+Summary: JEPA research code.
+Requires-Python: >=3.9
+License-File: LICENSE
