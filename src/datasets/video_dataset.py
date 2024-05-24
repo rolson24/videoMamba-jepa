@@ -41,7 +41,7 @@ def make_videodataset(
     datasets_weights=None,
     collator=None,
     drop_last=True,
-    num_workers=10,
+    num_workers=8,
     pin_mem=True,
     duration=None,
     log_dir=None,
@@ -82,7 +82,7 @@ def make_videodataset(
         drop_last=drop_last,
         pin_memory=pin_mem,
         num_workers=num_workers,
-        persistent_workers=num_workers > 0)
+        persistent_workers=False)
     logger.info('VideoDataset unsupervised data loader created')
 
     return dataset, data_loader, dist_sampler
@@ -126,9 +126,11 @@ class VideoDataset(torch.utils.data.Dataset):
         samples, labels = [], []
         self.num_samples_per_dataset = []
         for data_path in self.data_paths:
+            print(self.data_paths)
 
             if data_path[-4:] == '.csv':
                 data = pd.read_csv(data_path, header=None, delimiter=" ")
+                print(data[:5])
                 samples += list(data.values[:, 0])
                 labels += list(data.values[:, 1])
                 num_samples = len(data)
