@@ -100,6 +100,10 @@ def grad_logger(named_params):
                 stats.last_layer = grad_norm
                 if stats.first_layer is None:
                     stats.first_layer = grad_norm
+            elif 'A_log' in n:
+                stats.last_layer = grad_norm
+                if stats.first_layer is None:
+                    stats.first_layer = grad_norm
     if stats.first_layer is None or stats.last_layer is None:
         stats.first_layer = stats.last_layer = 0.
     return stats

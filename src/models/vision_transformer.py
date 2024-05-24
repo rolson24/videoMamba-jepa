@@ -170,7 +170,9 @@ class VisionTransformer(nn.Module):
         if pos_embed is not None:
             pos_embed = self.interpolate_pos_encoding(x, pos_embed)
         x = self.patch_embed(x)
+        # print(f"x after reshape {x.shape}")
         if pos_embed is not None:
+            # print(f"positional embedding shape: {self.pos_embed.shape}")
             x += pos_embed
         B, N, D = x.shape
 
@@ -178,6 +180,7 @@ class VisionTransformer(nn.Module):
         if masks is not None:
             x = apply_masks(x, masks)
             masks = torch.cat(masks, dim=0)
+        # print(f"x after removing mask tokens: {x.shape}")
 
         # Fwd prop
         outs = []
@@ -185,12 +188,14 @@ class VisionTransformer(nn.Module):
             x = blk(x, mask=masks)
             if self.out_layers is not None and i in self.out_layers:
                 outs.append(self.norm(x))
+        # print(f"output of transformer blocks: {x.shape}")
 
         if self.out_layers is not None:
             return outs
 
         if self.norm is not None:
             x = self.norm(x)
+        # print(f"x after add-norm: {x.shape}")
 
         return x
 
@@ -244,7 +249,7 @@ class VisionTransformer(nn.Module):
                 mode='bicubic')
             pos_embed = pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
             return pos_embed
-
+ 
 
 def vit_tiny(patch_size=16, **kwargs):
     model = VisionTransformer(

@@ -36,10 +36,10 @@ from timm.models.vision_transformer import _load_weights
 
 import math
 
-from mamba_ssm.modules.mamba_simple import Mamba
+from mamba.mamba_ssm.modules.mamba_simple import Mamba
 
 try:
-    from mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
+    from mamba.mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
 except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
@@ -226,9 +226,10 @@ class VisionMambaPredictor(nn.Module):
         residual_in_fp32=True,
         bimamba=True,
         # video
-        kernel_size=2, # token depth in temporal dimension
+        tubelet_size=2, # token depth in temporal dimension
         num_frames=8, # must be greater than kernel_size
         fc_drop_rate=0., 
+        uniform_power=False,
         device=None,
         dtype=None,
         # checkpoint
@@ -237,6 +238,7 @@ class VisionMambaPredictor(nn.Module):
         use_mask_tokens=False,
         num_mask_tokens=2,
         zero_init_mask_tokens=True,
+        **kwargs
     ):
         factory_kwargs = {"device": device, "dtype": dtype} # follow MambaLMHeadModel
         super().__init__()
@@ -245,6 +247,12 @@ class VisionMambaPredictor(nn.Module):
         self.use_checkpoint = use_checkpoint
         self.checkpoint_num = checkpoint_num
         self.bimamba = bimamba
+        self.is_video = num_frames > 1
+        self.tubelet_size = tubelet_size
+        self.uniform_power = uniform_power
+        self.input_size = img_size
+        self.patch_size = patch_size
+        self.num_frames = num_frames
         print(f'Use checkpoint: {use_checkpoint}')
         print(f'Checkpoint number: {checkpoint_num}')
 
@@ -266,21 +274,20 @@ class VisionMambaPredictor(nn.Module):
 
         self.patch_embed = PatchEmbed(
             img_size=img_size, patch_size=patch_size, 
-            kernel_size=kernel_size,
+            kernel_size=tubelet_size,
             in_chans=channels, embed_dim=embed_dim
         )
-        self.num_patches = (num_frames // kernel_size) * self.patch_embed.num_patches
+        self.num_patches = (num_frames // tubelet_size) * self.patch_embed.num_patches
 
-        # Position embedding
-        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, self.embed_dim))
-        self.temporal_pos_embedding = nn.Parameter(torch.zeros(1, num_frames // kernel_size, embed_dim))
+        self.predictor_pos_embed = None
+        self.predictor_pos_embed = nn.Parameter(
+            torch.zeros(1, self.num_patches, predictor_embed_dim),
+            requires_grad=False)
+        
+        if self.predictor_pos_embed is not None:
+            self._init_pos_embed(self.predictor_pos_embed.data)  # sincos pos-embed
 
 
-
-        self.input_size = img_size
-        self.patch_size = patch_size
-        # --
-        self.num_frames = num_frames
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         inter_dpr = [0.0] + dpr
@@ -290,7 +297,7 @@ class VisionMambaPredictor(nn.Module):
         self.layers = nn.ModuleList(
             [
                 create_block(
-                    embed_dim,
+                    d_model=predictor_embed_dim,
                     ssm_cfg=ssm_cfg,
                     norm_epsilon=norm_epsilon,
                     rms_norm=rms_norm,
@@ -306,13 +313,14 @@ class VisionMambaPredictor(nn.Module):
         )
 
         # Normalize & project back to input dimension
-        self.predictor_norm = (nn.LayerNorm if not rms_norm else RMSNorm)(embed_dim, eps=norm_epsilon, **factory_kwargs)
+        self.predictor_norm = (nn.LayerNorm if not rms_norm else RMSNorm)(predictor_embed_dim, eps=norm_epsilon, **factory_kwargs)
         self.predictor_proj = nn.Linear(predictor_embed_dim, embed_dim, bias=True)
+
 
         # ------ initialize weights
 
         self.apply(segm_init_weights)
-        trunc_normal_(self.pos_embed, std=.02)
+        # trunc_normal_(self.pos_embed, std=.02)
         # mamba init
         self.apply(
             partial(
@@ -334,21 +342,21 @@ class VisionMambaPredictor(nn.Module):
         # self.apply(self._init_weights)
         # self._rescale_blocks()
 
-    # def _init_pos_embed(self, pos_embed):
-    #     embed_dim = pos_embed.size(-1)
-    #     grid_size = self.input_size // self.patch_size
-    #     if self.is_video:
-    #         grid_depth = self.num_frames // self.tubelet_size
-    #         sincos = get_3d_sincos_pos_embed(
-    #             embed_dim,
-    #             grid_size,
-    #             grid_depth,
-    #             cls_token=False,
-    #             uniform_power=self.uniform_power
-    #         )
-    #     else:
-    #         sincos = get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False)
-    #     pos_embed.copy_(torch.from_numpy(sincos).float().unsqueeze(0))
+    def _init_pos_embed(self, pos_embed):
+        embed_dim = pos_embed.size(-1)
+        grid_size = self.input_size // self.patch_size
+        if self.is_video:
+            grid_depth = self.num_frames // self.tubelet_size
+            sincos = get_3d_sincos_pos_embed(
+                embed_dim,
+                grid_size,
+                grid_depth,
+                cls_token=False,
+                uniform_power=self.uniform_power
+            )
+        else:
+            sincos = get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False)
+        pos_embed.copy_(torch.from_numpy(sincos).float().unsqueeze(0))
 
     # def _init_weights(self, m):
     #     if isinstance(m, nn.Linear):
@@ -395,7 +403,7 @@ class VisionMambaPredictor(nn.Module):
         x = alpha**0.5 * x + (1.-alpha)**0.5 * torch.randn(x.shape, device=x.device)
         return x
 
-    def forward(self, ctxt, tgt, masks_ctxt, masks_tgt, mask_index=1):
+    def forward(self, ctxt, tgt, masks_ctxt, masks_tgt, mask_index=1, inference_params=None):
         """
         :param ctxt: context tokens
         :param tgt: target tokens
@@ -422,6 +430,9 @@ class VisionMambaPredictor(nn.Module):
         if self.predictor_pos_embed is not None:
             ctxt_pos_embed = self.predictor_pos_embed.repeat(B, 1, 1)
             x += apply_masks(ctxt_pos_embed, masks_ctxt)
+
+        # print(f"positional embedding shape: {x.shape}")
+
 
         # Map target tokens to predictor dimensions & add noise (fwd diffusion)
         if self.mask_tokens is None:
@@ -451,13 +462,43 @@ class VisionMambaPredictor(nn.Module):
         masks_tgt = torch.cat(masks_tgt, dim=0)
         masks = torch.cat([masks_ctxt, masks_tgt], dim=1)
 
-        # Fwd prop
-        for blk in self.predictor_blocks:
-            x = blk(x, mask=masks)
-        x = self.predictor_norm(x)
+        # mamba impl
+        residual = None
+        hidden_states = x
+        for idx, layer in enumerate(self.layers):
+            if self.use_checkpoint and idx < self.checkpoint_num:
+                hidden_states, residual = layer(
+                    hidden_states, residual, inference_params=inference_params,
+                    use_checkpoint=True
+                )
+            else:
+                hidden_states, residual = layer(
+                    hidden_states, residual, inference_params=inference_params
+                )
+        # print(f"output of mamba blocks: {hidden_states.shape}")
+
+        if not self.fused_add_norm:
+            if residual is None:
+                residual = hidden_states
+            else:
+                residual = residual + self.drop_path(hidden_states)
+            hidden_states = self.predictor_norm(residual.to(dtype=self.norm.weight.dtype))
+        else:
+            # Set prenorm=False here since we don't need the residual
+            fused_add_norm_fn = rms_norm_fn if isinstance(self.predictor_norm, RMSNorm) else layer_norm_fn
+            hidden_states = fused_add_norm_fn(
+                self.drop_path(hidden_states),
+                self.predictor_norm.weight,
+                self.predictor_norm.bias,
+                eps=self.predictor_norm.eps,
+                residual=residual,
+                prenorm=False,
+                residual_in_fp32=self.residual_in_fp32,
+            )
+        # print(f"hidden states after add-norm: {hidden_states.shape}")
 
         # Return output corresponding to target tokens
-        x = x[:, N_ctxt:]
+        x = hidden_states[:, N_ctxt:]
         x = self.predictor_proj(x)
 
         return x

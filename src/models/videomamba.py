@@ -16,12 +16,16 @@ from timm.models.layers import trunc_normal_
 from timm.models.layers import DropPath, to_2tuple
 from timm.models.vision_transformer import _load_weights
 
+from src.masks.utils import apply_masks
+from src.models.utils.pos_embs import get_2d_sincos_pos_embed, get_3d_sincos_pos_embed
+
+
 import math
 
-from mamba_ssm.modules.mamba_simple import Mamba
+from mamba.mamba_ssm.modules.mamba_simple import Mamba
 
 try:
-    from mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
+    from mamba.mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
 except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
@@ -222,6 +226,8 @@ class VisionMamba(nn.Module):
             # checkpoint
             use_checkpoint=False,
             checkpoint_num=0,
+            uniform_power=False,
+            **kwargs
         ):
         factory_kwargs = {"device": device, "dtype": dtype} # follow MambaLMHeadModel
         super().__init__()
@@ -230,6 +236,13 @@ class VisionMamba(nn.Module):
         self.use_checkpoint = use_checkpoint
         self.checkpoint_num = checkpoint_num
         self.bimamba = bimamba
+        self.input_size = img_size
+        self.patch_size = patch_size
+        self.num_frames = num_frames
+        self.tubelet_size = tubelet_size
+        self.is_video = num_frames > 1
+        self.uniform_power = uniform_power
+        self.num_heads = 1
         print(f'Use checkpoint: {use_checkpoint}')
         print(f'Checkpoint number: {checkpoint_num}')
 
@@ -244,10 +257,20 @@ class VisionMamba(nn.Module):
         )
         self.num_patches = (num_frames // tubelet_size) * self.patch_embed.num_patches
 
-        # Position embedding
-        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, self.embed_dim))
-        self.temporal_pos_embedding = nn.Parameter(torch.zeros(1, num_frames // tubelet_size, embed_dim))
 
+        # Position embedding NOT USING RIGHT NOW
+        # self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, self.embed_dim))
+        # self.temporal_pos_embedding = nn.Parameter(torch.zeros(1, num_frames // tubelet_size, embed_dim))
+        # self.num_patches = self.patch_embed.num_patches
+
+        # Postion embedding for sin-cos embeddings
+        self.pos_embed = None
+        self.pos_embed = nn.Parameter(
+            torch.zeros(1, self.num_patches, embed_dim),
+            requires_grad=False)
+
+        if self.pos_embed is not None:
+            self._init_pos_embed(self.pos_embed.data)  # sincos pos-embed
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         inter_dpr = [0.0] + dpr
@@ -277,7 +300,7 @@ class VisionMamba(nn.Module):
         # original init
         self.apply(segm_init_weights)
         # self.head.apply(segm_init_weights)
-        trunc_normal_(self.pos_embed, std=.02)
+        # trunc_normal_(self.pos_embed, std=.02)
 
         # mamba init
         self.apply(
@@ -309,6 +332,23 @@ class VisionMamba(nn.Module):
                 rescale(layer.mixer.mamba.x_proj_b.weight.data, layer_id + 1)
                 rescale(layer.mixer.mamba.dt_proj_b.weight.data, layer_id + 1)
 
+
+    def _init_pos_embed(self, pos_embed):
+        embed_dim = pos_embed.size(-1)
+        grid_size = self.input_size // self.patch_size
+        if self.is_video:
+            grid_depth = self.num_frames // self.tubelet_size
+            sincos = get_3d_sincos_pos_embed(
+                embed_dim,
+                grid_size,
+                grid_depth,
+                cls_token=False,
+                uniform_power=self.uniform_power
+            )
+        else:
+            sincos = get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False)
+        pos_embed.copy_(torch.from_numpy(sincos).float().unsqueeze(0))
+
     @torch.jit.ignore
     def no_weight_decay(self):
         return {"pos_embed", "temporal_pos_embedding"}
@@ -322,29 +362,50 @@ class VisionMamba(nn.Module):
 
     def forward_features(self, x, mask=None, inference_params=None):
 
+
+        # Sin-Cos Positional embedds
+        pos_embed = self.pos_embed
+        if pos_embed is not None:
+            pos_embed = self.interpolate_pos_encoding(x, pos_embed)
+
         x = self.patch_embed(x)
         B, C, T, H, W = x.shape
-        x = x.permute(0, 2, 3, 4, 1).reshape(B * T, H * W, C)
+        # print(f"x before reshape {x.shape}")
+        x = x.permute(0, 2, 3, 4, 1).reshape(B * T, H * W, C) # rearange to be B, T, H, W, C and then reshape to be B*T, H*W, C
+        # print(f"x after reshape {x.shape}")
+        x = rearrange(x, '(b t) n m -> b (t n) m', b=B, t=T) # now the middle is num patches * t
+        # print(f"shape of x after rearrange: {x.shape}")
 
-        # cls_token = self.cls_token.expand(x.shape[0], -1, -1)  # stole cls_tokens impl from Phil Wang, thanks
-        # x = torch.cat((cls_token, x), dim=1)
-        x = x + self.pos_embed
+        if pos_embed is not None:
+            x += pos_embed
 
-        # temporal pos
-        # cls_tokens = x[:B, :1, :]
-        x = x[:, 1:]
-        x = rearrange(x, '(b t) n m -> (b n) t m', b=B, t=T)
-        x = x + self.temporal_pos_embedding
-        x = rearrange(x, '(b n) t m -> b (t n) m', b=B, t=T)
-        # x = torch.cat((cls_tokens, x), dim=1)
 
-        # mask
-        x_vis = x[mask].reshape(B, -1, C) # mask mean visible
+        # THIS IS FOR LEARNED POS EMBEDS
+        # print(f"positional embedding shape: {self.pos_embed.shape}")
+        # x = x + self.pos_embed
+
+        # # temporal pos
+        # # cls_tokens = x[:B, :1, :]
+        # # x = x[:, 1:]
+
+        # x = rearrange(x, '(b t) n m -> (b n) t m', b=B, t=T) # n is H*W or num patches 
+        # x = x + self.temporal_pos_embedding
+        # x = rearrange(x, '(b n) t m -> b (t n) m', b=B, t=T) # now middle is num patches * t
+
+        # print(f"shape of x after rearrange: {x.shape}")
+        # # x = torch.cat((cls_tokens, x), dim=1)
+
+
+        # Apply the masks for the context encoder
+        if mask is not None:
+            x = apply_masks(x, mask)
+            # masks = torch.cat(masks, dim=0)
+            # print(f"x after removing mask tokens: {x.shape}")
         # x = self.pos_drop(x)
 
         # mamba impl
         residual = None
-        hidden_states = x_vis
+        hidden_states = x
         for idx, layer in enumerate(self.layers):
             if self.use_checkpoint and idx < self.checkpoint_num:
                 hidden_states, residual = layer(
@@ -355,6 +416,7 @@ class VisionMamba(nn.Module):
                 hidden_states, residual = layer(
                     hidden_states, residual, inference_params=inference_params
                 )
+        # print(f"output of mamba blocks: {hidden_states.shape}")
 
         if not self.fused_add_norm:
             if residual is None:
@@ -374,6 +436,8 @@ class VisionMamba(nn.Module):
                 prenorm=False,
                 residual_in_fp32=self.residual_in_fp32,
             )
+        # print(f"hidden states after add-norm: {hidden_states.shape}")
+
 
         # return the hidden states
         return hidden_states
@@ -386,6 +450,58 @@ class VisionMamba(nn.Module):
         x = self.forward_features(x, masks, inference_params)
         # x = self.head(self.head_drop(x))
         return x
+    
+    
+    def interpolate_pos_encoding(self, x, pos_embed):
+
+        _, N, dim = pos_embed.shape
+
+        if self.is_video:
+
+            # If pos_embed already corret size, just return
+            _, _, T, H, W = x.shape
+            if H == self.input_size and W == self.input_size and T == self.num_frames:
+                return pos_embed
+
+            # Convert depth, height, width of input to be measured in patches
+            # instead of pixels/frames
+            T = T // self.tubelet_size
+            H = H // self.patch_size
+            W = W // self.patch_size
+
+            # Compute the initialized shape of the positional embedding measured
+            # in patches
+            N_t = self.num_frames // self.tubelet_size
+            N_h = N_w = self.input_size // self.patch_size
+            assert N_h * N_w * N_t == N, 'Positional embedding initialized incorrectly'
+
+            # Compute scale factor for spatio-temporal interpolation
+            scale_factor = (T/N_t, H/N_h, W/N_w)
+
+            pos_embed = nn.functional.interpolate(
+                pos_embed.reshape(1, N_t, N_h, N_w, dim).permute(0, 4, 1, 2, 3),
+                scale_factor=scale_factor,
+                mode='trilinear')
+            pos_embed = pos_embed.permute(0, 2, 3, 4, 1).view(1, -1, dim)
+            return pos_embed
+
+        else:
+
+            # If pos_embed already corret size, just return
+            _, _, H, W = x.shape
+            if H == self.input_size and W == self.input_size:
+                return pos_embed
+
+            # Compute scale factor for spatial interpolation
+            npatch = (H // self.patch_size) * (W // self.patch_size)
+            scale_factor = math.sqrt(npatch / N)
+
+            pos_embed = nn.functional.interpolate(
+                pos_embed.reshape(1, int(math.sqrt(N)), int(math.sqrt(N)), dim).permute(0, 3, 1, 2),
+                scale_factor=scale_factor,
+                mode='bicubic')
+            pos_embed = pos_embed.permute(0, 2, 3, 1).view(1, -1, dim)
+            return pos_embed
 
 
 def inflate_weight(weight_2d, time_dim, center=True):
@@ -418,10 +534,11 @@ def load_state_dict(model, state_dict, center=True):
     print(msg)
 
 
+
 @register_model
 def videomamba_tiny(pretrained=False, **kwargs):
     model = VisionMamba(
-        patch_size=16, 
+        # patch_size=16, 
         embed_dim=192, 
         depth=24, 
         rms_norm=True, 

@@ -15,8 +15,12 @@ def apply_masks(x, masks, concat=True):
     """
     all_x = []
     for m in masks:
+        # print(f"mask shape: {m.shape}")
+        # print(f"x shape: {x.shape}")
         mask_keep = m.unsqueeze(-1).repeat(1, 1, x.size(-1))
+        # print(f"mask shape unsqueezed: {mask_keep.shape}")
         all_x += [torch.gather(x, dim=1, index=mask_keep)]
+        # print(f"all_x shape: {all_x[0].shape}")
     if not concat:
         return all_x
 
