@@ -30,7 +30,7 @@ data_aug:
   - 1.0
   reprob: 0.0
 logging:
-  folder:  /content/drive/MyDrive/jepa/output_dir
+  folder:  /content/drive/MyDrive/jepa/output_dir/vitT16
   write_tag: jepa
 loss:
   loss_exp: 1.0
@@ -66,11 +66,11 @@ meta:
   seed: 234
   eval_freq: 100
   use_sdpa: true
-  dtype: float16
+  dtype: bfloat16
 model:
-  model_name: vit_large
+  model_name: vit_tiny
   pred_depth: 12
-  pred_embed_dim: 384
+  pred_embed_dim: 96
   uniform_power: true
   use_mask_tokens: true
   zero_init_mask_tokens: true
