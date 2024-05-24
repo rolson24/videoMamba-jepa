@@ -16,7 +16,7 @@ try:
     os.environ['CUDA_VISIBLE_DEVICES'] = os.environ['SLURM_LOCALID']
 except Exception:
     pass
-
+ 
 import copy
 import time
 import numpy as np
@@ -423,8 +423,11 @@ def main(args, resume_preempt=False):
                     """
                     with torch.no_grad():
                         h = target_encoder(c)
+                        # print(f"target outputs: {h.shape}")
                         h = F.layer_norm(h, (h.size(-1),))  # normalize over feature-dim  [B, N, D]
+                        # print(f"normalized target features: {h.shape}")
                         # -- create targets (masked regions of h)
+                        # print(f"shape of masks_pred: {masks_pred}")
                         h = apply_masks(h, masks_pred, concat=False)
                         return h
 

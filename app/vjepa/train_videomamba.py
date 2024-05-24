@@ -38,6 +38,7 @@ from src.utils.logging import (
     grad_logger,
     adamw_logger,
     AverageMeter)
+from torch.utils.tensorboard import SummaryWriter
 from src.utils.tensors import repeat_interleave_batch
 
 from app.vjepa.utils import (
@@ -62,6 +63,8 @@ torch.backends.cudnn.benchmark = True
 
 
 logger = get_logger(__name__)
+tensorboard_writer = SummaryWriter()
+
 
 
 def main(args, resume_preempt=False):
@@ -144,6 +147,7 @@ def main(args, resume_preempt=False):
     wd = float(cfgs_opt.get('weight_decay'))
     final_wd = float(cfgs_opt.get('final_weight_decay'))
     num_epochs = cfgs_opt.get('epochs')
+    accum_steps = cfgs_opt.get('accumulation_steps')
     warmup = cfgs_opt.get('warmup')
     start_lr = cfgs_opt.get('start_lr')
     lr = cfgs_opt.get('lr')
@@ -211,6 +215,7 @@ def main(args, resume_preempt=False):
         num_mask_tokens=len(cfgs_mask),
         zero_init_mask_tokens=zero_init_mask_tokens,
         device=device,
+        use_vit_pred=False,
         patch_size=patch_size,
         num_frames=num_frames,
         tubelet_size=tubelet_size,
@@ -377,7 +382,7 @@ def main(args, resume_preempt=False):
         gpu_time_meter = AverageMeter()
         wall_time_meter = AverageMeter()
 
-        for itr in range(ipe):
+        for itr in range(ipe * accum_steps):
             itr_start_time = time.time()
 
             try:
@@ -424,8 +429,11 @@ def main(args, resume_preempt=False):
                     """
                     with torch.no_grad():
                         h = target_encoder(c)
+                        # print(f"target outputs: {h.shape}")
                         h = F.layer_norm(h, (h.size(-1),))  # normalize over feature-dim  [B, N, D]
+                        # print(f"normalized target features: {h.shape}")
                         # -- create targets (masked regions of h)
+                        # print(f"shape of masks_pred: {masks_pred}")
                         h = apply_masks(h, masks_pred, concat=False)
                         return h
 
@@ -455,37 +463,43 @@ def main(args, resume_preempt=False):
                     h = forward_target(clips)
                     z = forward_context(clips, h)
                     loss_jepa = loss_fn(z, h)  # jepa prediction loss
+                    print(f"jepa loss: {loss_jepa}")
                     pstd_z = reg_fn(z)  # predictor variance across patches
                     loss_reg += torch.mean(F.relu(1.-pstd_z))
                 loss = loss_jepa + reg_coeff * loss_reg
 
-                # Step 2. Backward & step
+                # Step 2. Backward
                 _enc_norm, _pred_norm = 0., 0.
                 if mixed_precision:
-                    scaler.scale(loss).backward()
-                    scaler.unscale_(optimizer)
+                    scaler.scale(loss / accum_steps).backward()
                 else:
-                    loss.backward()
-                if (epoch > warmup) and (clip_grad is not None):
-                    _enc_norm = torch.nn.utils.clip_grad_norm_(encoder.parameters(), clip_grad)
-                    _pred_norm = torch.nn.utils.clip_grad_norm_(predictor.parameters(), clip_grad)
-                if mixed_precision:
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    optimizer.step()
-                grad_stats = grad_logger(encoder.named_parameters())
-                grad_stats.global_norm = float(_enc_norm)
-                grad_stats_pred = grad_logger(predictor.named_parameters())
-                grad_stats_pred.global_norm = float(_pred_norm)
-                optimizer.zero_grad()
-                optim_stats = adamw_logger(optimizer)
+                    (loss / accum_steps).backward()
 
-                # Step 3. momentum update of target encoder
-                m = next(momentum_scheduler)
-                with torch.no_grad():
-                    for param_q, param_k in zip(encoder.parameters(), target_encoder.parameters()):
-                        param_k.data.mul_(m).add_((1.-m) * param_q.detach().data)
+                # Step 3. Step Gradient after accumulation
+                if (itr + 1) % accum_steps == 0:
+                    if (epoch > warmup) and (clip_grad is not None):
+                        _enc_norm = torch.nn.utils.clip_grad_norm_(encoder.parameters(), clip_grad)
+                        _pred_norm = torch.nn.utils.clip_grad_norm_(predictor.parameters(), clip_grad)
+                    if mixed_precision:
+                        scaler.unscale_(optimizer)
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        optimizer.step()
+
+                    grad_stats = grad_logger(encoder.named_parameters())
+                    grad_stats.global_norm = float(_enc_norm)
+                    grad_stats_pred = grad_logger(predictor.named_parameters())
+                    grad_stats_pred.global_norm = float(_pred_norm)
+                    optimizer.zero_grad()
+                    optim_stats = adamw_logger(optimizer)
+
+                    # Step 4. momentum update of target encoder
+                    m = next(momentum_scheduler)
+                    with torch.no_grad():
+                        for param_q, param_k in zip(encoder.parameters(), target_encoder.parameters()):
+                            # print("momentum update")
+                            param_k.data.mul_(m).add_((1.-m) * param_q.detach().data)
 
                 return (
                     float(loss),
@@ -542,6 +556,12 @@ def main(args, resume_preempt=False):
                            torch.cuda.max_memory_allocated() / 1024.0**2,
                            gpu_time_meter.avg,
                            wall_time_meter.avg))
+                    tensorboard_writer.add_scalar('Loss/Train', loss_meter.avg, epoch*ipe+itr)
+                    tensorboard_writer.add_scalar('Loss/Train_jepa', jepa_loss_meter.avg, epoch*ipe+itr)
+                    tensorboard_writer.add_scalar('Time/GPU', gpu_time_meter.avg, epoch*ipe+itr)
+                    tensorboard_writer.add_scalar('Memory/GPU', torch.cuda.max_memory_allocated() / 1024.0**2, epoch*ipe+itr)
+                    tensorboard_writer.add_scalar('HyperParams/Learning_Rate', _new_lr, epoch*ipe+itr)
+                    tensorboard_writer.add_scalar('HyperParams/Weight_Decay', _new_wd, epoch*ipe+itr)
 
                     if optim_stats is not None:
                         logger.info(
@@ -563,6 +583,12 @@ def main(args, resume_preempt=False):
                                grad_stats.min,
                                grad_stats.max,
                                grad_stats.global_norm))
+                        tensorboard_writer.add_scalar('Grad/Encoder_first', grad_stats.first_layer, epoch*ipe+itr)
+                        tensorboard_writer.add_scalar('Grad/Encoder_last', grad_stats.last_layer, epoch*ipe+itr)
+                        tensorboard_writer.add_scalar('Grad/Encoder_min', grad_stats.min, epoch*ipe+itr)
+                        tensorboard_writer.add_scalar('Grad/Encoder_max', grad_stats.max, epoch*ipe+itr)
+                        tensorboard_writer.add_scalar('Grad/Encoder_global_norm', grad_stats.global_norm, epoch*ipe+itr)
+
 
                     if grad_stats_pred is not None:
                         logger.info(
@@ -573,8 +599,15 @@ def main(args, resume_preempt=False):
                                grad_stats_pred.min,
                                grad_stats_pred.max,
                                grad_stats_pred.global_norm))
+                        tensorboard_writer.add_scalar('Grad/Predictor_first', grad_stats_pred.first_layer, epoch*ipe+itr)
+                        tensorboard_writer.add_scalar('Grad/Predictor_last', grad_stats_pred.last_layer, epoch*ipe+itr)
+                        tensorboard_writer.add_scalar('Grad/Predictor_min', grad_stats_pred.min, epoch*ipe+itr)
+                        tensorboard_writer.add_scalar('Grad/Predictor_max', grad_stats_pred.max, epoch*ipe+itr)
+                        tensorboard_writer.add_scalar('Grad/Predictor_global_norm', grad_stats_pred.global_norm, epoch*ipe+itr)
+                    tensorboard_writer.flush()
             log_stats()
             assert not np.isnan(loss), 'loss is nan'
+
 
         # -- Save Checkpoint
         logger.info('avg. loss %.3f' % loss_meter.avg)

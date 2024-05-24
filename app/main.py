@@ -39,7 +39,7 @@ def process_main(rank, fname, world_size, devices):
 
     logger.info(f'called-params {fname}')
 
-    # Load config
+    # Load config 
     params = None
     with open(fname, 'r') as y_file:
         params = yaml.load(y_file, Loader=yaml.FullLoader)

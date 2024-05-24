@@ -11,7 +11,7 @@ import warnings
 import yaml
 
 
-import torch
+import torch 
 
 import src.models.vision_transformer as video_vit
 import src.models.predictor as vit_pred
@@ -160,6 +160,7 @@ def init_video_mamba_model(
     num_frames=16,
     tubelet_size=2,
     model_name='videomamba_small',
+    use_vit_pred=True,
     crop_size=224,
     pred_depth=6,
     pred_embed_dim=384,
@@ -177,37 +178,55 @@ def init_video_mamba_model(
         use_sdpa=use_sdpa,
     )
     encoder = MultiMaskWrapper(encoder)
-    predictor = vmamba_pred.__dict__['vmamba_predictor'](
-        img_size=crop_size,
-        use_mask_tokens=use_mask_tokens,
-        patch_size=patch_size,
-        num_frames=num_frames,
-        tubelet_size=tubelet_size,
-        embed_dim=encoder.backbone.embed_dim,
-        predictor_embed_dim=pred_embed_dim,
-        depth=pred_depth,
-        num_heads=encoder.backbone.num_heads,
-        uniform_power=uniform_power,
-        num_mask_tokens=num_mask_tokens,
-        zero_init_mask_tokens=zero_init_mask_tokens,
-        use_sdpa=use_sdpa,
-    )
-    predictor = PredictorMultiMaskWrapper(predictor)
 
-    # def init_weights(m):
-    #     if isinstance(m, torch.nn.Linear):
-    #         trunc_normal_(m.weight, std=0.02)
-    #         if m.bias is not None:
-    #             torch.nn.init.constant_(m.bias, 0)
-    #     elif isinstance(m, torch.nn.LayerNorm):
-    #         torch.nn.init.constant_(m.bias, 0)
-    #         torch.nn.init.constant_(m.weight, 1.0)
+    if use_vit_pred:
+        predictor = vit_pred.__dict__['vit_predictor'](
+            img_size=crop_size,
+            use_mask_tokens=use_mask_tokens,
+            patch_size=patch_size,
+            num_frames=num_frames,
+            tubelet_size=tubelet_size,
+            embed_dim=encoder.backbone.embed_dim,
+            predictor_embed_dim=pred_embed_dim,
+            depth=pred_depth,
+            num_heads=1,
+            uniform_power=uniform_power,
+            num_mask_tokens=num_mask_tokens,
+            zero_init_mask_tokens=zero_init_mask_tokens,
+            use_sdpa=use_sdpa,
+        )
+        predictor = PredictorMultiMaskWrapper(predictor)
 
-    # for m in encoder.modules():
-    #     init_weights(m)
+        def init_weights(m):
+            if isinstance(m, torch.nn.Linear):
+                trunc_normal_(m.weight, std=0.02)
+                if m.bias is not None:
+                    torch.nn.init.constant_(m.bias, 0)
+            elif isinstance(m, torch.nn.LayerNorm):
+                torch.nn.init.constant_(m.bias, 0)
+                torch.nn.init.constant_(m.weight, 1.0)
 
-    # for m in predictor.modules():
-    #     init_weights(m)
+
+        for m in predictor.modules():
+            init_weights(m)
+    else:
+        predictor = vmamba_pred.__dict__['vmamba_predictor'](
+            img_size=crop_size,
+            use_mask_tokens=use_mask_tokens,
+            patch_size=patch_size,
+            num_frames=num_frames,
+            tubelet_size=tubelet_size,
+            embed_dim=encoder.backbone.embed_dim,
+            predictor_embed_dim=pred_embed_dim,
+            depth=pred_depth,
+            # num_heads=encoder.backbone.num_heads,
+            uniform_power=uniform_power,
+            num_mask_tokens=num_mask_tokens,
+            zero_init_mask_tokens=zero_init_mask_tokens,
+            use_sdpa=use_sdpa,
+        )
+        predictor = PredictorMultiMaskWrapper(predictor)
+
 
     encoder.to(device)
     predictor.to(device)
