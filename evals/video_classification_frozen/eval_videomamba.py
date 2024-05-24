@@ -6,6 +6,7 @@
 #
 
 import os
+import gc
 
 # -- FOR DISTRIBUTED TRAINING ENSURE ONLY 1 DEVICE VISIBLE PER PROCESS
 try:
@@ -46,6 +47,8 @@ from src.utils.logging import (
     AverageMeter,
     CSVLogger
 )
+from torch.utils.tensorboard import SummaryWriter
+
 
 from evals.video_classification_frozen.utils import (
     make_transforms,
@@ -56,6 +59,7 @@ from evals.video_classification_frozen.utils import (
 logging.basicConfig()
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+tensorboard_writer = SummaryWriter()
 
 _GLOBAL_SEED = 0
 np.random.seed(_GLOBAL_SEED)
@@ -104,6 +108,7 @@ def main(args_eval, resume_preempt=False):
     args_opt = args_eval.get('optimization')
     resolution = args_opt.get('resolution', 224)
     batch_size = args_opt.get('batch_size')
+    accum_steps = args_opt.get('accumulation_steps')
     attend_across_segments = args_opt.get('attend_across_segments', False)
     num_epochs = args_opt.get('num_epochs')
     wd = args_opt.get('weight_decay')
@@ -182,7 +187,7 @@ def main(args_eval, resume_preempt=False):
     # -- init classifier
     classifier = AttentiveClassifier(
         embed_dim=encoder.embed_dim,
-        num_heads=encoder.num_heads,
+        num_heads=1,
         depth=1,
         num_classes=num_classes,
     ).to(device)
@@ -269,11 +274,13 @@ def main(args_eval, resume_preempt=False):
             encoder=encoder,
             classifier=classifier,
             scaler=scaler,
+            accum_steps=accum_steps,
             optimizer=optimizer,
             scheduler=scheduler,
             wd_scheduler=wd_scheduler,
             data_loader=train_loader,
             use_bfloat16=use_bfloat16)
+        gc.collect()
 
         val_acc = run_one_epoch(
             device=device,
@@ -284,12 +291,16 @@ def main(args_eval, resume_preempt=False):
             encoder=encoder,
             classifier=classifier,
             scaler=scaler,
+            accum_steps=accum_steps,
             optimizer=optimizer,
             scheduler=scheduler,
             wd_scheduler=wd_scheduler,
             data_loader=val_loader,
             use_bfloat16=use_bfloat16)
+        gc.collect()
 
+        tensorboard_writer.add_scalar('Accuracy/Train', train_acc, epoch+1)
+        tensorboard_writer.add_scalar('Accuracy/Val', val_acc, epoch+1)
         logger.info('[%5d] train: %.3f%% test: %.3f%%' % (epoch + 1, train_acc, val_acc))
         if rank == 0:
             csv_logger.log(epoch + 1, train_acc, val_acc)
@@ -310,6 +321,7 @@ def run_one_epoch(
     num_spatial_views,
     num_temporal_views,
     attend_across_segments,
+    accum_steps
 ):
 
     classifier.train(mode=training)
@@ -318,8 +330,9 @@ def run_one_epoch(
     for itr, data in enumerate(data_loader):
 
         if training:
-            scheduler.step()
-            wd_scheduler.step()
+            if (itr + 1) % accum_steps == 0:
+                scheduler.step()
+                wd_scheduler.step()
 
         with torch.cuda.amp.autocast(dtype=torch.float16, enabled=use_bfloat16):
 
@@ -362,21 +375,26 @@ def run_one_epoch(
 
         if training:
             if use_bfloat16:
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(classifier.parameters(), 1.0)
-                scaler.step(optimizer)
-                scaler.update()
+                scaler.scale(loss / accum_steps).backward()
+                if (itr + 1) % accum_steps == 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(classifier.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
             else:
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(classifier.parameters(), 1.0)
-                optimizer.step()
-            optimizer.zero_grad()
+                (loss / accum_steps).backward()
+                if (itr + 1) % accum_steps == 0:
+                    torch.nn.utils.clip_grad_norm_(classifier.parameters(), 1.0)
+                    optimizer.step()
+            if (itr + 1) % accum_steps == 0:
+                optimizer.zero_grad()
 
-        if itr % 20 == 0:
+        if (itr / accum_steps) % 20 == 0:
             logger.info('[%5d] %.3f%% (loss: %.3f) [mem: %.2e]'
                         % (itr, top1_meter.avg, loss,
                            torch.cuda.max_memory_allocated() / 1024.**2))
+            tensorboard_writer.add_scalar("Loss/Train", loss, itr/accum_steps)
+            tensorboard_writer.add_scalar("Accuracy/Train_running", top1_meter.avg, itr/accum_steps)
 
     return top1_meter.avg
 
@@ -504,7 +522,7 @@ def init_model(
     uniform_power=False,
     checkpoint_key='target_encoder'
 ):
-    encoder = vit.__dict__[model_name](
+    encoder = videomamba.__dict__[model_name](
         img_size=crop_size,
         patch_size=patch_size,
         num_frames=frames_per_clip,
