@@ -1,4 +1,4 @@
-# Copyright (c) 2023, Albert Gu, Tri Dao.
+# Copyright (c) 2023, Tri Dao.
 import sys
 import warnings
 import os
@@ -7,7 +7,6 @@ import ast
 from pathlib import Path
 from packaging.version import parse, Version
 import platform
-import shutil
 
 from setuptools import setup, find_packages
 import subprocess
@@ -32,16 +31,16 @@ with open("README.md", "r", encoding="utf-8") as fh:
 # ninja build does not work unless include_dirs are abs path
 this_dir = os.path.dirname(os.path.abspath(__file__))
 
-PACKAGE_NAME = "mamba_ssm"
+PACKAGE_NAME = "causal_conv1d"
 
-BASE_WHEEL_URL = "https://github.com/state-spaces/mamba/releases/download/{tag_name}/{wheel_name}"
+BASE_WHEEL_URL = "https://github.com/Dao-AILab/causal-conv1d/releases/download/{tag_name}/{wheel_name}"
 
 # FORCE_BUILD: Force a fresh build locally, instead of attempting to find prebuilt wheels
 # SKIP_CUDA_BUILD: Intended to allow CI to use a simple `python setup.py sdist` run to copy over raw files, without any cuda compilation
-FORCE_BUILD = os.getenv("MAMBA_FORCE_BUILD", "FALSE") == "TRUE"
-SKIP_CUDA_BUILD = os.getenv("MAMBA_SKIP_CUDA_BUILD", "FALSE") == "TRUE"
+FORCE_BUILD = os.getenv("CAUSAL_CONV1D_FORCE_BUILD", "FALSE") == "TRUE"
+SKIP_CUDA_BUILD = os.getenv("CAUSAL_CONV1D_SKIP_CUDA_BUILD", "FALSE") == "TRUE"
 # For CI, we want the option to build with C++11 ABI since the nvcr images use C++11 ABI
-FORCE_CXX11_ABI = os.getenv("MAMBA_FORCE_CXX11_ABI", "FALSE") == "TRUE"
+FORCE_CXX11_ABI = os.getenv("CAUSAL_CONV1D_FORCE_CXX11_ABI", "FALSE") == "TRUE"
 
 
 def get_platform():
@@ -94,14 +93,14 @@ if not SKIP_CUDA_BUILD:
     TORCH_MAJOR = int(torch.__version__.split(".")[0])
     TORCH_MINOR = int(torch.__version__.split(".")[1])
 
-    check_if_cuda_home_none(PACKAGE_NAME)
+    check_if_cuda_home_none("causal_conv1d")
     # Check, if CUDA11 is installed for compute capability 8.0
     cc_flag = []
     if CUDA_HOME is not None:
         _, bare_metal_version = get_cuda_bare_metal_version(CUDA_HOME)
         if bare_metal_version < Version("11.6"):
             raise RuntimeError(
-                f"{PACKAGE_NAME} is only supported on CUDA 11.6 and above.  "
+                "causal_conv1d is only supported on CUDA 11.6 and above.  "
                 "Note: make sure nvcc has a supported version by running nvcc -V."
             )
 
@@ -121,25 +120,18 @@ if not SKIP_CUDA_BUILD:
 
     ext_modules.append(
         CUDAExtension(
-            name="selective_scan_cuda",
+            name="causal_conv1d_cuda",
             sources=[
-                "csrc/selective_scan/selective_scan.cpp",
-                "csrc/selective_scan/selective_scan_fwd_fp32.cu",
-                "csrc/selective_scan/selective_scan_fwd_fp16.cu",
-                "csrc/selective_scan/selective_scan_fwd_bf16.cu",
-                "csrc/selective_scan/selective_scan_bwd_fp32_real.cu",
-                "csrc/selective_scan/selective_scan_bwd_fp32_complex.cu",
-                "csrc/selective_scan/selective_scan_bwd_fp16_real.cu",
-                "csrc/selective_scan/selective_scan_bwd_fp16_complex.cu",
-                "csrc/selective_scan/selective_scan_bwd_bf16_real.cu",
-                "csrc/selective_scan/selective_scan_bwd_bf16_complex.cu",
+                "csrc/causal_conv1d.cpp",
+                "csrc/causal_conv1d_fwd.cu",
+                "csrc/causal_conv1d_bwd.cu",
+                "csrc/causal_conv1d_update.cu",
             ],
             extra_compile_args={
-                "cxx": ["-O3", "-std=c++17"],
+                "cxx": ["-O3"],
                 "nvcc": append_nvcc_threads(
                     [
                         "-O3",
-                        "-std=c++17",
                         "-U__CUDA_NO_HALF_OPERATORS__",
                         "-U__CUDA_NO_HALF_CONVERSIONS__",
                         "-U__CUDA_NO_BFLOAT16_OPERATORS__",
@@ -155,16 +147,16 @@ if not SKIP_CUDA_BUILD:
                     + cc_flag
                 ),
             },
-            include_dirs=[Path(this_dir) / "csrc" / "selective_scan"],
+            include_dirs=[this_dir],
         )
     )
 
 
 def get_package_version():
-    with open(Path(this_dir) / PACKAGE_NAME / "__init__.py", "r") as f:
+    with open(Path(this_dir) / "causal_conv1d" / "__init__.py", "r") as f:
         version_match = re.search(r"^__version__\s*=\s*(.*)$", f.read(), re.MULTILINE)
     public_version = ast.literal_eval(version_match.group(1))
-    local_version = os.environ.get("MAMBA_LOCAL_VERSION")
+    local_version = os.environ.get("CAUSAL_CONV1D_LOCAL_VERSION")
     if local_version:
         return f"{public_version}+{local_version}"
     else:
@@ -182,16 +174,16 @@ def get_wheel_url():
     torch_cuda_version = parse("11.8") if torch_cuda_version.major == 11 else parse("12.2")
     python_version = f"cp{sys.version_info.major}{sys.version_info.minor}"
     platform_name = get_platform()
-    mamba_ssm_version = get_package_version()
+    causal_conv1d_version = get_package_version()
     # cuda_version = f"{cuda_version_raw.major}{cuda_version_raw.minor}"
     cuda_version = f"{torch_cuda_version.major}{torch_cuda_version.minor}"
     torch_version = f"{torch_version_raw.major}.{torch_version_raw.minor}"
     cxx11_abi = str(torch._C._GLIBCXX_USE_CXX11_ABI).upper()
 
     # Determine wheel URL based on CUDA version, torch version, python version and OS
-    wheel_filename = f"{PACKAGE_NAME}-{mamba_ssm_version}+cu{cuda_version}torch{torch_version}cxx11abi{cxx11_abi}-{python_version}-{python_version}-{platform_name}.whl"
+    wheel_filename = f"{PACKAGE_NAME}-{causal_conv1d_version}+cu{cuda_version}torch{torch_version}cxx11abi{cxx11_abi}-{python_version}-{python_version}-{platform_name}.whl"
     wheel_url = BASE_WHEEL_URL.format(
-        tag_name=f"v{mamba_ssm_version}", wheel_name=wheel_filename
+        tag_name=f"v{causal_conv1d_version}", wheel_name=wheel_filename
     )
     return wheel_url, wheel_filename
 
@@ -224,7 +216,7 @@ class CachedWheelsCommand(_bdist_wheel):
 
             wheel_path = os.path.join(self.dist_dir, archive_basename + ".whl")
             print("Raw wheel path", wheel_path)
-            shutil.move(wheel_filename, wheel_path)
+            os.rename(wheel_filename, wheel_path)
         except urllib.error.HTTPError:
             print("Precompiled wheel not found. Building from source...")
             # If the wheel could not be downloaded, build from source
@@ -243,15 +235,15 @@ setup(
             "dist",
             "docs",
             "benchmarks",
-            "mamba_ssm.egg-info",
+            "causal_conv1d.egg-info",
         )
     ),
-    author="Tri Dao, Albert Gu",
-    author_email="tri@tridao.me, agu@cs.cmu.edu",
-    description="Mamba state-space model",
+    author="Tri Dao",
+    author_email="tri@tridao.me",
+    description="Causal depthwise conv1d in CUDA, with a PyTorch interface",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/state-spaces/mamba",
+    url="https://github.com/Dao-AILab/causal-conv1d",
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: BSD License",
@@ -268,9 +260,5 @@ setup(
         "torch",
         "packaging",
         "ninja",
-        "einops",
-        "triton",
-        "transformers",
-        "causal_conv1d",
     ],
 )
