@@ -4,3 +4,5 @@ src/datasets/SSv2/*
 /build/*
 output_dir/*
 *.egg
+runs/*/events.out.tfevents.*
+*.egg-info/*

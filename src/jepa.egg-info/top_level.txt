@@ -1,5 +1,6 @@
 datasets
 mamba
+mamba2
 masks
 models
 utils
