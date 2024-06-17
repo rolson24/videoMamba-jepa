@@ -22,10 +22,12 @@ from src.models.utils.pos_embs import get_2d_sincos_pos_embed, get_3d_sincos_pos
 
 import math
 
-from mamba.mamba_ssm.modules.mamba_simple import Mamba
+# from mamba.mamba_ssm.modules.mamba_simple import Mamba
+from mamba2.mamba_ssm.modules.mamba_simple import Mamba
 
 try:
-    from mamba.mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
+    # from mamba.mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
+    from mamba2.mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
 except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
