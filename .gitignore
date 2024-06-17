@@ -2,3 +2,5 @@
 *.pyc
 src/datasets/SSv2/*
 /build/*
+output_dir/*
+*.egg
