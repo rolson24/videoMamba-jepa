@@ -23,7 +23,7 @@ from src.models.utils.pos_embs import get_2d_sincos_pos_embed, get_3d_sincos_pos
 import math
 
 # from mamba.mamba_ssm.modules.mamba_simple import Mamba
-from mamba2.mamba_ssm.modules.mamba_simple import Mamba
+from mamba2.mamba_ssm.modules.mamba2_simple import Mamba2Simple as Mamba
 
 try:
     # from mamba.mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
@@ -106,6 +106,7 @@ class Block(nn.Module):
 
 def create_block(
     d_model,
+    head_dim = None,
     ssm_cfg=None,
     norm_epsilon=1e-5,
     drop_path=0.,
@@ -120,7 +121,10 @@ def create_block(
     factory_kwargs = {"device": device, "dtype": dtype}
     if ssm_cfg is None:
         ssm_cfg = {}
-    mixer_cls = partial(Mamba, layer_idx=layer_idx, bimamba=bimamba, **ssm_cfg, **factory_kwargs)
+    if head_dim is not None:
+        mixer_cls = partial(Mamba, headdim=head_dim, layer_idx=layer_idx, bimamba=bimamba, **ssm_cfg, **factory_kwargs)
+    else:
+        mixer_cls = partial(Mamba, layer_idx=layer_idx, bimamba=bimamba, **ssm_cfg, **factory_kwargs)
     norm_cls = partial(nn.LayerNorm if not rms_norm else RMSNorm, eps=norm_epsilon)
     block = Block(
         d_model,
@@ -208,6 +212,7 @@ class VisionMamba(nn.Module):
             patch_size=16, 
             depth=12, 
             embed_dim=768,
+            head_dim=128,
             channels=3, 
             # num_classes=1000,
             drop_rate=0.,
@@ -282,6 +287,7 @@ class VisionMamba(nn.Module):
             [
                 create_block(
                     embed_dim,
+                    head_dim,
                     ssm_cfg=ssm_cfg,
                     norm_epsilon=norm_epsilon,
                     rms_norm=rms_norm,
@@ -542,6 +548,7 @@ def videomamba_tiny(pretrained=False, **kwargs):
     model = VisionMamba(
         # patch_size=16, 
         embed_dim=192, 
+        head_dim=96,
         depth=24, 
         rms_norm=True, 
         residual_in_fp32=True, 

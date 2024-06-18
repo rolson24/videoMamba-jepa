@@ -100,6 +100,7 @@ def main(args, resume_preempt=False):
     model_name = cfgs_model.get('model_name')
     pred_depth = cfgs_model.get('pred_depth')
     pred_embed_dim = cfgs_model.get('pred_embed_dim')
+    pred_head_dim = cfgs_model.get('pred_head_dim')
     uniform_power = cfgs_model.get('uniform_power', True)
     use_mask_tokens = cfgs_model.get('use_mask_tokens', True)
     zero_init_mask_tokens = cfgs_model.get('zero_init_mask_tokens', True)
@@ -420,6 +421,10 @@ def main(args, resume_preempt=False):
             def train_step():
                 _new_lr = scheduler.step()
                 _new_wd = wd_scheduler.step()
+
+                grad_stats = None
+                grad_stats_pred = None
+                optim_stats = None
                 # --
 
                 def forward_target(c):
@@ -463,7 +468,7 @@ def main(args, resume_preempt=False):
                     h = forward_target(clips)
                     z = forward_context(clips, h)
                     loss_jepa = loss_fn(z, h)  # jepa prediction loss
-                    print(f"jepa loss: {loss_jepa}")
+                    # print(f"jepa loss: {loss_jepa}")
                     pstd_z = reg_fn(z)  # predictor variance across patches
                     loss_reg += torch.mean(F.relu(1.-pstd_z))
                 loss = loss_jepa + reg_coeff * loss_reg
@@ -487,12 +492,8 @@ def main(args, resume_preempt=False):
                     else:
                         optimizer.step()
 
-                    grad_stats = grad_logger(encoder.named_parameters())
-                    grad_stats.global_norm = float(_enc_norm)
-                    grad_stats_pred = grad_logger(predictor.named_parameters())
-                    grad_stats_pred.global_norm = float(_pred_norm)
+
                     optimizer.zero_grad()
-                    optim_stats = adamw_logger(optimizer)
 
                     # Step 4. momentum update of target encoder
                     m = next(momentum_scheduler)
@@ -500,6 +501,12 @@ def main(args, resume_preempt=False):
                         for param_q, param_k in zip(encoder.parameters(), target_encoder.parameters()):
                             # print("momentum update")
                             param_k.data.mul_(m).add_((1.-m) * param_q.detach().data)
+
+                grad_stats = grad_logger(encoder.named_parameters())
+                grad_stats.global_norm = float(_enc_norm)
+                grad_stats_pred = grad_logger(predictor.named_parameters())
+                grad_stats_pred.global_norm = float(_pred_norm)
+                optim_stats = adamw_logger(optimizer)
 
                 return (
                     float(loss),
@@ -535,7 +542,7 @@ def main(args, resume_preempt=False):
                     grad_stats_pred.global_norm,
                     gpu_etime_ms,
                     iter_elapsed_time_ms)
-                if (itr % log_freq == 0) or np.isnan(loss) or np.isinf(loss):
+                if ((itr/accum_steps) % log_freq == 0) or np.isnan(loss) or np.isinf(loss):
                     logger.info(
                         '[%d, %5d] loss: %.3f | p%.3f r%.3f | '
                         'input_var: %.3f %.3f | '
@@ -544,7 +551,7 @@ def main(args, resume_preempt=False):
                         '[mem: %.2e] '
                         '[gpu: %.1f ms]'
                         '[wall: %.1f ms]'
-                        % (epoch + 1, itr,
+                        % (epoch + 1, itr/accum_steps,
                            loss_meter.avg,
                            jepa_loss_meter.avg,
                            reg_loss_meter.avg,
@@ -566,7 +573,7 @@ def main(args, resume_preempt=False):
                     if optim_stats is not None:
                         logger.info(
                             '[%d, %5d] first moment: %.2e [%.2e %.2e] second moment: %.2e [%.2e %.2e]'
-                            % (epoch + 1, itr,
+                            % (epoch + 1, itr/accum_steps,
                                optim_stats.get('exp_avg').avg,
                                optim_stats.get('exp_avg').min,
                                optim_stats.get('exp_avg').max,
@@ -577,7 +584,7 @@ def main(args, resume_preempt=False):
                     if grad_stats is not None:
                         logger.info(
                             '[%d, %5d] enc_grad_stats: f/l[%.2e %.2e] mn/mx(%.2e, %.2e) %.2e'
-                            % (epoch + 1, itr,
+                            % (epoch + 1, itr/accum_steps,
                                grad_stats.first_layer,
                                grad_stats.last_layer,
                                grad_stats.min,
@@ -593,7 +600,7 @@ def main(args, resume_preempt=False):
                     if grad_stats_pred is not None:
                         logger.info(
                             '[%d, %5d] pred_grad_stats: f/l[%.2e %.2e] mn/mx(%.2e, %.2e) %.2e'
-                            % (epoch + 1, itr,
+                            % (epoch + 1, itr/accum_steps,
                                grad_stats_pred.first_layer,
                                grad_stats_pred.last_layer,
                                grad_stats_pred.min,
