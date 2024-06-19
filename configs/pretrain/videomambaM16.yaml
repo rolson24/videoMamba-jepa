@@ -67,8 +67,8 @@ meta:
   seed: 234
   eval_freq: 5
   # use_sdpa: true
-  # dtype: bfloat16
-  dtype: float32
+  dtype: bfloat16
+  # dtype: float32
 model:
   model_name: videomamba_middle
   pred_depth: 12
@@ -85,10 +85,10 @@ optimization:
   final_weight_decay: 0.4
   epochs: 300
   accumulation_steps: 1
-  warmup: 20
-  start_lr: 1.0e-06
-  lr: 0.00001875
-  final_lr: 8.0e-07
+  warmup: 5
+  start_lr: 1.0e-04
+  lr: 0.0032
+  final_lr: 8.0e-06
   ema:
   - 0.998
   - 1.0

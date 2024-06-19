@@ -588,6 +588,7 @@ def videomamba_middle(pretrained=False, **kwargs):
         patch_size=16, 
         embed_dim=576, 
         # head_dim=
+        drop_path_rate=0.8,
         depth=32, 
         rms_norm=True, 
         residual_in_fp32=True, 
