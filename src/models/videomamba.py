@@ -22,8 +22,8 @@ from src.models.utils.pos_embs import get_2d_sincos_pos_embed, get_3d_sincos_pos
 
 import math
 
-# from mamba.mamba_ssm.modules.mamba_simple import Mamba
-from mamba2.mamba_ssm.modules.mamba2_simple import Mamba2Simple as Mamba
+from mamba2.mamba_ssm.modules.mamba_simple import Mamba
+# from mamba2.mamba_ssm.modules.mamba2_simple import Mamba2Simple as Mamba
 
 try:
     # from mamba.mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
@@ -587,6 +587,7 @@ def videomamba_middle(pretrained=False, **kwargs):
     model = VisionMamba(
         patch_size=16, 
         embed_dim=576, 
+        # head_dim=
         depth=32, 
         rms_norm=True, 
         residual_in_fp32=True, 

@@ -36,8 +36,8 @@ from timm.models.vision_transformer import _load_weights
 
 import math
 
-# from mamba.mamba_ssm.modules.mamba_simple import Mamba
-from mamba2.mamba_ssm.modules.mamba2_simple import Mamba2Simple as Mamba
+from mamba2.mamba_ssm.modules.mamba_simple import Mamba
+# from mamba2.mamba_ssm.modules.mamba2_simple import Mamba2Simple as Mamba
 
 try:
     # from mamba.mamba_ssm.ops.triton.layernorm import RMSNorm, layer_norm_fn, rms_norm_fn
