@@ -30,7 +30,7 @@ def process_main(rank, fname, world_size, devices):
     os.environ['CUDA_VISIBLE_DEVICES'] = str(devices[rank].split(':')[-1])
 
     import logging
-    from src.utils.logging import get_logger
+    from utils.logger import get_logger
     logger = get_logger(force=True)
     if rank == 0:
         logger.setLevel(logging.INFO)

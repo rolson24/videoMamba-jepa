@@ -42,7 +42,7 @@ from src.utils.schedulers import (
     WarmupCosineSchedule,
     CosineWDSchedule,
 )
-from src.utils.logging import (
+from utils.logger import (
     AverageMeter,
     CSVLogger
 )

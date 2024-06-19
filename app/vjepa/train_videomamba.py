@@ -31,7 +31,7 @@ from src.masks.random_tube import MaskCollator as TubeMaskCollator
 from src.masks.multiblock3d import MaskCollator as MB3DMaskCollator
 from src.masks.utils import apply_masks
 from src.utils.distributed import init_distributed, AllReduce
-from src.utils.logging import (
+from utils.logger import (
     CSVLogger,
     gpu_timer,
     get_logger,

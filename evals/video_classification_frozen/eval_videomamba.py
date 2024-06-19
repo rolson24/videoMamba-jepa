@@ -43,7 +43,7 @@ from src.utils.schedulers import (
     WarmupCosineSchedule,
     CosineWDSchedule,
 )
-from src.utils.logging import (
+from utils.logger import (
     AverageMeter,
     CSVLogger
 )
@@ -187,7 +187,7 @@ def main(args_eval, resume_preempt=False):
     # -- init classifier
     classifier = AttentiveClassifier(
         embed_dim=encoder.embed_dim,
-        num_heads=1,
+        num_heads=(encoder.embed_dim/encoder.head_dim),
         depth=1,
         num_classes=num_classes,
     ).to(device)
