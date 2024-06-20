@@ -2,6 +2,7 @@ LICENSE
 README.md
 setup.py
 src/datasets/data_manager.py
+src/datasets/downloader.py
 src/datasets/image_dataset.py
 src/datasets/video_dataset.py
 src/datasets/utils/weighted_sampler.py
@@ -88,7 +89,8 @@ src/models/utils/multimask.py
 src/models/utils/patch_embed.py
 src/models/utils/pos_embs.py
 src/utils/distributed.py
-src/utils/logging.py
+src/utils/graphing.py
+src/utils/logger.py
 src/utils/monitoring.py
 src/utils/schedulers.py
 src/utils/tensors.py

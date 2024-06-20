@@ -22,7 +22,7 @@ ftfy
 fvcore
 imageio
 lm_eval
-numpy
+numpy<2.0
 omegaconf
 opencv_python
 packaging
@@ -40,8 +40,8 @@ tensorboardX
 tensorflow
 termcolor
 timm
-# torch==2.1.1+cu118
-# torchvision==0.16.1+cu118
+torch
+torchvision
 tqdm
 transformers
 wandb

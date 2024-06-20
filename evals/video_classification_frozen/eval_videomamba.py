@@ -55,11 +55,13 @@ from evals.video_classification_frozen.utils import (
     ClipAggregation,
     FrameAggregation
 )
+log_dir = "/scratch/Raif/videoMamba/logs"
 
 logging.basicConfig()
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-tensorboard_writer = SummaryWriter()
+
+tensorboard_writer = SummaryWriter(log_dir=log_dir)
 
 _GLOBAL_SEED = 0
 np.random.seed(_GLOBAL_SEED)

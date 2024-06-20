@@ -31,7 +31,7 @@ data_aug:
   - 1.0
   reprob: 0.0
 logging:
-  folder: /content/drive/MyDrive/jepa/output_dir/videoMamba2T_pred_SSv2_v2
+  folder: /scratch/Raif/videoMamba/output_dir/videoMambaM_SSv2_pretrain
   write_tag: jepa
 loss:
   loss_exp: 1.0

@@ -38,6 +38,8 @@ tensorboardX
 tensorflow
 termcolor
 timm
+torch
+torchvision
 tqdm
 transformers
 wandb

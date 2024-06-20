@@ -61,9 +61,10 @@ np.random.seed(_GLOBAL_SEED)
 torch.manual_seed(_GLOBAL_SEED)
 torch.backends.cudnn.benchmark = True
 
+log_dir = "/scratch/Raif/videoMamba/logs"
 
 logger = get_logger(__name__)
-tensorboard_writer = SummaryWriter()
+tensorboard_writer = SummaryWriter(log_dir=log_dir)
 
 
 
