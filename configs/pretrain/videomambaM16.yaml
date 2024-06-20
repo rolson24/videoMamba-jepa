@@ -4,7 +4,7 @@ tasks_per_node: 8
 data:
   dataset_type: VideoDataset
   datasets:
-    - /content/SSv2_train_probe_filelist.csv
+    - /scratch/SSv2/labels/SSv2_train_filelist.csv
     # - /your_path_to_ssv2_csv_file_index.csv
     # - /your_path_to_howto100m_csv_file_index.csv
   decode_one_clip: true
